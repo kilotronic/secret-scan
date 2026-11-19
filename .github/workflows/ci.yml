@@ -14,6 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: shellcheck src/scan.sh
+      # The trufflehog action (bumped by Dependabot) and the image it runs must be the same version.
+      - name: trufflehog image matches the trufflehog action
+        run: |
+          action=$(grep -oE 'trufflehog@[0-9a-f]+ # v[0-9.]+' action.yml | sed 's/.*# v//')
+          image=$(awk '/trufflehog-version:/{f=1} f && /default:/{gsub(/[" ]/,"",$2); print $2; exit}' action.yml)
+          echo "action=$action image=$image"
+          test -n "$action" && test "$action" = "$image"
 
   # Default mode on this repo's own pull request or push: both scanners, nothing to find.
   dogfood-default:

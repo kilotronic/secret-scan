@@ -44,7 +44,7 @@ Which commits it scans by default:
 | `gitleaks` | `true` | Run gitleaks. A `.gitleaks.toml` at the repo root (e.g. to allow known look-alikes) is used |
 | `trufflehog` | `true` | Run trufflehog (needs Docker) |
 | `trufflehog-args` | `--results=verified` | Extra trufflehog arguments; the default fails only on working keys |
-| `trufflehog-version` | `3.99.8` | trufflehog image tag |
+| `trufflehog-version` | `3.99.9` | trufflehog image tag |
 
 Output: `range`, the git range that was scanned.
 
