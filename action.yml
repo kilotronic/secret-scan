@@ -1,0 +1,77 @@
+name: Secret Scan
+description: Scan only the commits a pull request or push brings in, with gitleaks (anything shaped like a secret) and trufflehog (keys that still work).
+branding:
+  icon: lock
+  color: gray-dark
+
+inputs:
+  commits:
+    description: >-
+      What to scan. Empty (default) = the commits this event brings in: a pull request's commits, or a push's
+      new commits (only the tip of a new branch). A git range (e.g. "main..HEAD") scans those commits.
+      "all" scans the whole history of HEAD. Other events (schedule, workflow_dispatch) scan everything.
+    required: false
+    default: ""
+  gitleaks:
+    description: Run gitleaks, which fails on anything shaped like a secret. A .gitleaks.toml at the repo root is used if present.
+    required: false
+    default: "true"
+  trufflehog:
+    description: Run trufflehog, which tries each key it finds against its service. Needs Docker on the runner.
+    required: false
+    default: "true"
+  trufflehog-args:
+    description: Extra trufflehog arguments. The default fails only on keys that still work.
+    required: false
+    default: "--results=verified"
+  trufflehog-version:
+    description: Trufflehog image tag (pinned; "latest" is not recommended).
+    required: false
+    default: "3.99.8"
+
+outputs:
+  range:
+    description: The git range that was scanned ("" when nothing needed scanning).
+    value: ${{ steps.range.outputs.range }}
+
+runs:
+  using: composite
+  steps:
+    - name: Work out which commits to scan
+      id: range
+      shell: bash
+      env:
+        COMMITS: ${{ inputs.commits }}
+        EVENT: ${{ github.event_name }}
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        PUSH_BEFORE: ${{ github.event.before }}
+        PUSH_AFTER: ${{ github.event.after }}
+      run: bash "$GITHUB_ACTION_PATH/src/scan.sh" range
+
+    - name: gitleaks (nothing shaped like a secret)
+      id: gitleaks
+      if: inputs.gitleaks == 'true' && steps.range.outputs.skip != 'true'
+      continue-on-error: true
+      shell: bash
+      env:
+        RANGE: ${{ steps.range.outputs.range }}
+      run: bash "$GITHUB_ACTION_PATH/src/scan.sh" gitleaks
+
+    - name: trufflehog (no key that still works)
+      id: trufflehog
+      if: inputs.trufflehog == 'true' && steps.range.outputs.skip != 'true'
+      continue-on-error: true
+      uses: trufflesecurity/trufflehog@ea68ca03c865c5f324e86e849ced20ed3cf9dbbb # v3.99.8
+      with:
+        base: ${{ steps.range.outputs.base }}
+        head: ${{ steps.range.outputs.head }}
+        extra_args: ${{ inputs.trufflehog-args }}
+        version: ${{ inputs.trufflehog-version }}
+
+    - name: Result
+      shell: bash
+      env:
+        GITLEAKS: ${{ steps.gitleaks.outcome }}
+        TRUFFLEHOG: ${{ steps.trufflehog.outcome }}
+      run: bash "$GITHUB_ACTION_PATH/src/scan.sh" verdict

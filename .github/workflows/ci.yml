@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck src/scan.sh
+
+  # Default mode on this repo's own pull request or push: both scanners, nothing to find.
+  dogfood-default:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+
+  # Range mode: a clean commit passes both scanners; a commit with a token-shaped string is refused.
+  # The token is made up at run time, so it is never in this repo's history.
+  dogfood-range:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make a clean commit and one with a fake token
+        run: |
+          git config user.name ci && git config user.email ci@kilotronic.com
+          echo "token = ghp_$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 36)" > leak.txt
+          git add leak.txt && git commit -q -m leak
+          git rm -q leak.txt && echo hello > clean.txt && git add clean.txt && git commit -q -m clean
+      - uses: ./
+        with:
+          commits: HEAD~1..HEAD
+      - uses: ./
+        id: leak
+        continue-on-error: true
+        with:
+          commits: HEAD~2..HEAD~1
+          trufflehog: "false" # the fake token can't be verified, so only gitleaks would catch it
+      - name: The scan must refuse the fake token
+        run: test "${{ steps.leak.outcome }}" = "failure"
+
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    needs: [lint, dogfood-default, dogfood-range]
+    if: always()
+    steps:
+      - name: Every job must succeed
+        run: |
+          r='${{ join(needs.*.result, ' ') }}'
+          echo "results: $r"
+          for x in $r; do [ "$x" = success ] || exit 1; done
