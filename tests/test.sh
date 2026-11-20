@@ -30,7 +30,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-unset COMMITS EVENT PR_BASE PR_HEAD PUSH_BEFORE PUSH_AFTER RUNNER_TEMP RANGE GITLEAKS TRUFFLEHOG \
+unset COMMITS EVENT PR_BASE PR_HEAD PUSH_BEFORE PUSH_AFTER PUSH_REF DEFAULT_BRANCH RUNNER_TEMP RANGE GITLEAKS TRUFFLEHOG \
   PRE_COMMIT_FROM_REF PRE_COMMIT_TO_REF GITHUB_OUTPUT
 # The pinned gitleaks goes to a cache inside this run, not the user's ~/.cache.
 export XDG_CACHE_HOME="$tmp/xdg-cache"
@@ -61,8 +61,6 @@ equals "pull request base output" "$(output base)" "$base"
 equals "pull request head output" "$(output head)" "$clean"
 range EVENT=push PUSH_BEFORE="$leak" PUSH_AFTER="$clean"
 equals "push scans before..after" "$(output range)" "$leak..$clean"
-range EVENT=push PUSH_BEFORE="$zero" PUSH_AFTER="$clean"
-equals "new branch scans only its tip" "$(output range)" "$clean^!"
 range EVENT=push PUSH_BEFORE="$leak" PUSH_AFTER="$zero"
 equals "deleted branch skips the scan" "$(output skip)" "true"
 equals "deleted branch has no range" "$(output range)" ""
@@ -74,6 +72,70 @@ equals "an explicit range resolves base to a commit id" "$(output base)" "$leak"
 equals "an explicit range resolves head to a commit id" "$(output head)" "$clean"
 cd "$tmp" # outside any checkout; not a subshell, so a failure is counted
 expect "range outside a checkout is refused" 1 env EVENT=schedule bash "$SCAN" range
+cd "$tmp/repo"
+
+# --- range on a new branch: its commits that the default branch doesn't have yet, from a shallow checkout
+# A remote whose main is m0 <- m1 (m1 holds an old token main already has), and branches:
+#   feature  m0 <- leak <- fclean       merged  feature + a merge of main       fresh  m1 <- c1 (clean)
+nb="$tmp/nb"
+git init -q --bare "$nb/remote.git"
+git init -q "$nb/work"
+cd "$nb/work"
+git remote add origin "$nb/remote.git"
+git checkout -q -b main
+echo hello >a.txt && git add a.txt && git commit -q -m m0
+m0=$(git rev-parse HEAD)
+git checkout -q -b feature
+token >leak.txt && git add leak.txt && git commit -q -m leak
+git rm -q leak.txt && echo more >b.txt && git add b.txt && git commit -q -m fclean
+fclean=$(git rev-parse HEAD)
+git checkout -q main
+token >old.txt && git add old.txt && git commit -q -m m1
+m1=$(git rev-parse HEAD)
+git checkout -q -b fresh
+echo fine >c.txt && git add c.txt && git commit -q -m c1
+c1=$(git rev-parse HEAD)
+git checkout -q -b merged feature
+git merge -q --no-ff -m merge main
+merged=$(git rev-parse HEAD)
+git push -q origin main feature fresh merged "$m1:refs/heads/nothing-new" "$m1:refs/tags/v9"
+# new <branch> <ref> [VAR=value...]: a shallow checkout of <branch> (actions/checkout's default), then the
+# range for the push that created <ref> at that branch's tip.
+new() {
+  local branch=$1 ref=$2
+  shift 2
+  cd "$nb" && rm -rf "$nb/checkout"
+  git clone -q --depth 1 --branch "$branch" "file://$nb/remote.git" "$nb/checkout"
+  cd "$nb/checkout"
+  range EVENT=push PUSH_BEFORE="$zero" PUSH_AFTER="$(git rev-parse HEAD)" PUSH_REF="$ref" DEFAULT_BRANCH=main "$@"
+}
+new feature refs/heads/feature
+equals "new branch scans its commits main doesn't have" "$(output range)" "$m1..$fclean"
+equals "new branch gives trufflehog the merge base" "$(output base)" "$m0"
+equals "new branch head output" "$(output head)" "$fclean"
+expect "new branch: gitleaks refuses a token below its tip" 1 env RANGE="$(output range)" bash "$SCAN" gitleaks
+new fresh refs/heads/fresh
+equals "new branch off main's tip scans only its own commit" "$(output range)" "$m1..$c1"
+expect "new branch: gitleaks does not judge main's commits" 0 env RANGE="$(output range)" bash "$SCAN" gitleaks
+new merged refs/heads/merged
+equals "new branch with a merge of main scans past the merge" "$(output range)" "$m1..$merged"
+equals "new branch with a merge of main: merge base" "$(output base)" "$m1"
+expect "new branch with a merge of main: gitleaks refuses the merged-in token" 1 \
+  env RANGE="$(output range)" bash "$SCAN" gitleaks
+new nothing-new refs/heads/nothing-new
+equals "new branch with no new commits skips the scan" "$(output skip)" "true"
+equals "new branch with no new commits has no range" "$(output range)" ""
+new main refs/tags/v9
+equals "new tag on a commit main has skips the scan" "$(output skip)" "true"
+new main refs/heads/main
+equals "new default branch scans its whole history" "$(output range)" "$m1"
+equals "new default branch: trufflehog gets no base" "$(output base)" ""
+equals "new default branch: head output" "$(output head)" "$m1"
+expect "new default branch: gitleaks refuses a token in its history" 1 env RANGE="$(output range)" bash "$SCAN" gitleaks
+new fresh refs/heads/fresh DEFAULT_BRANCH=gone
+equals "new branch when the default branch is missing scans its whole history" "$(output range)" "$c1"
+new fresh refs/heads/fresh DEFAULT_BRANCH=
+equals "new branch with no default branch named scans its whole history" "$(output range)" "$c1"
 cd "$tmp/repo"
 unset GITHUB_OUTPUT
 
