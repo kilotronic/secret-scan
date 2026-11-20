@@ -61,7 +61,7 @@ The same scan runs on your machine with [prek](https://github.com/j178/prek) or
 ```yaml
 repos:
   - repo: https://github.com/kilotronic/secret-scan
-    rev: 814f89d661368214fc3fedb2bd583bef835a17cd  # v1.2.0
+    rev: 2665d6f2f0260d3ae0defbedcce27fc63ad6a168  # v1.2.1
     hooks:
       - id: secret-scan        # pre-commit: the staged changes
       - id: secret-scan-push   # pre-push: the commits being pushed
