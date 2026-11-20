@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: kilotronic/git-identity@ef36d47c998b7a247ac75d36f3e1ba56eb22b4ea # v2.3.0
+      - uses: kilotronic/git-identity@5a7b91c3194870cf535ba8c37a6c93b19b5a933b # v2.3.1
         with:
           domains: ixid.net, kilotronic.com
           allow-bots: dependabot
