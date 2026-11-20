@@ -26,12 +26,50 @@ output() { sed -n "s/^$1=//p" "$GITHUB_OUTPUT" | tail -1; }
 equals() { if [ "$2" = "$3" ]; then pass "$1"; else fail "$1 (got '$2', want '$3')"; fi; }
 token() { echo "token = ghp_$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 36)"; }
 
+# scans_same <name> <commit...>: after `range`, gitleaks finds a token in exactly these commits, and so does
+# trufflehog, run the way action.yml runs it: the pinned image, handed the range step's base and head and the
+# action's extra_args (with --no-verification, so a made-up token counts). Needs Docker; skipped without it,
+# except in CI.
+ACTION="$(dirname "$SCAN")/../action.yml"
+TRUFFLEHOG_IMAGE="ghcr.io/trufflesecurity/trufflehog:$(awk '/trufflehog-version:/{f=1} f && /default:/{gsub(/[" ]/,"",$2); print $2; exit}' "$ACTION")"
+TRUFFLEHOG_ARGS=$(sed -n 's/^ *extra_args: //p' "$ACTION" | sed 's/\${{ inputs.trufflehog-args }}/--no-verification/')
+if docker info >/dev/null 2>&1 && docker pull -q "$TRUFFLEHOG_IMAGE" >/dev/null; then
+  docker=true
+elif [ -n "${CI:-}" ]; then
+  docker=false
+  fail "Docker is needed to run trufflehog"
+else
+  docker=false
+  echo "skip trufflehog checks: no Docker"
+fi
+scans_same() {
+  local name=$1 base head want got
+  shift
+  want=$(printf '%s\n' "$@" | sed '/^$/d' | sort -u)
+  got=$(env RANGE="$(output range)" bash "$SCAN" gitleaks 2>/dev/null | sed -n 's/^Commit: *//p' | sort -u || true)
+  equals "$name: gitleaks" "$got" "$want"
+  [ "$docker" = true ] || return 0
+  base=$(output base) head=$(output head)
+  if [ -z "$head" ]; then
+    fail "$name: trufflehog (no head: the trufflehog action would pick its own commits)"
+    return 0
+  elif [ "$base" = "$head" ]; then
+    fail "$name: trufflehog (base and head are the same commit, which the trufflehog action refuses)"
+    return 0
+  fi
+  # shellcheck disable=SC2086 # extra_args is split into words, as the trufflehog action does
+  got=$(docker run --rm -v "$PWD:/tmp" -w /tmp "$TRUFFLEHOG_IMAGE" git file:///tmp/ --since-commit "$base" \
+    --branch "$head" --no-update --json $TRUFFLEHOG_ARGS 2>/dev/null |
+    grep -oE '"commit":"[0-9a-f]+"' | cut -d'"' -f4 | sort -u || true)
+  equals "$name: trufflehog" "$got" "$want"
+}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 unset COMMITS EVENT PR_BASE PR_HEAD PUSH_BEFORE PUSH_AFTER PUSH_REF DEFAULT_BRANCH RUNNER_TEMP RANGE GITLEAKS TRUFFLEHOG \
-  PRE_COMMIT_FROM_REF PRE_COMMIT_TO_REF GITHUB_OUTPUT
+  TRUFFLEHOG_ENABLED   PRE_COMMIT_FROM_REF PRE_COMMIT_TO_REF GITHUB_OUTPUT
 # The pinned gitleaks goes to a cache inside this run, not the user's ~/.cache.
 export XDG_CACHE_HOME="$tmp/xdg-cache"
 
@@ -52,15 +90,18 @@ zero=0000000000000000000000000000000000000000
 # --- range: which commits each event scans
 range() {
   : >"$GITHUB_OUTPUT"
-  env "$@" bash "$SCAN" range >/dev/null
+  env "$@" bash "$SCAN" range >"$tmp/log" 2>&1 || {
+    fail "range $*"
+    sed 's/^/     /' "$tmp/log"
+  }
 }
 export GITHUB_OUTPUT="$tmp/out"
 range EVENT=pull_request PR_BASE="$base" PR_HEAD="$clean"
 equals "pull request scans base..head" "$(output range)" "$base..$clean"
-equals "pull request base output" "$(output base)" "$base"
-equals "pull request head output" "$(output head)" "$clean"
+scans_same "pull request" "$leak"
 range EVENT=push PUSH_BEFORE="$leak" PUSH_AFTER="$clean"
 equals "push scans before..after" "$(output range)" "$leak..$clean"
+scans_same "push"
 range EVENT=push PUSH_BEFORE="$leak" PUSH_AFTER="$zero"
 equals "deleted branch skips the scan" "$(output skip)" "true"
 equals "deleted branch has no range" "$(output range)" ""
@@ -68,8 +109,9 @@ range EVENT=schedule
 equals "other events scan everything" "$(output range)" "all"
 range EVENT=pull_request PR_BASE="$base" PR_HEAD="$clean" COMMITS="HEAD~1..HEAD"
 equals "an explicit range wins over the event" "$(output range)" "HEAD~1..HEAD"
-equals "an explicit range resolves base to a commit id" "$(output base)" "$leak"
-equals "an explicit range resolves head to a commit id" "$(output head)" "$clean"
+scans_same "an explicit range: what the scanners find" # clean removes the token: nothing
+range COMMITS="HEAD~2..HEAD"
+scans_same "an explicit range of names" "$leak"
 cd "$tmp" # outside any checkout; not a subshell, so a failure is counted
 expect "range outside a checkout is refused" 1 env EVENT=schedule bash "$SCAN" range
 cd "$tmp/repo"
@@ -84,9 +126,9 @@ cd "$nb/work"
 git remote add origin "$nb/remote.git"
 git checkout -q -b main
 echo hello >a.txt && git add a.txt && git commit -q -m m0
-m0=$(git rev-parse HEAD)
 git checkout -q -b feature
 token >leak.txt && git add leak.txt && git commit -q -m leak
+fleak=$(git rev-parse HEAD)
 git rm -q leak.txt && echo more >b.txt && git add b.txt && git commit -q -m fclean
 fclean=$(git rev-parse HEAD)
 git checkout -q main
@@ -113,16 +155,16 @@ new() {
 }
 new feature refs/heads/feature
 equals "new branch scans its commits main doesn't have" "$(output range)" "$m1..$fclean"
-equals "new branch gives trufflehog the merge base" "$(output base)" "$m0"
-equals "new branch head output" "$(output head)" "$fclean"
+scans_same "new branch" "$fleak"
 equals "new branch with new commits does not skip" "$(output skip)" ""
 expect "new branch: gitleaks refuses a token below its tip" 1 env RANGE="$(output range)" bash "$SCAN" gitleaks
 new fresh refs/heads/fresh
 equals "new branch off main's tip scans only its own commit" "$(output range)" "$m1..$c1"
 expect "new branch: gitleaks does not judge main's commits" 0 env RANGE="$(output range)" bash "$SCAN" gitleaks
+scans_same "new branch off main's tip"
 new merged refs/heads/merged
 equals "new branch with a merge of main scans past the merge" "$(output range)" "$m1..$merged"
-equals "new branch with a merge of main: merge base" "$(output base)" "$m1"
+scans_same "new branch with a merge of main" "$fleak"
 expect "new branch with a merge of main: gitleaks refuses the merged-in token" 1 \
   env RANGE="$(output range)" bash "$SCAN" gitleaks
 new nothing-new refs/heads/nothing-new
@@ -132,7 +174,7 @@ new main refs/tags/v9
 equals "new tag on a commit main has skips the scan" "$(output skip)" "true"
 new v8 refs/tags/v8 PUSH_AFTER="$v8"
 equals "new annotated tag off main scans its commits main doesn't have" "$(output range)" "$m1..$fclean"
-equals "new annotated tag gives trufflehog a commit as head" "$(output head)" "$fclean"
+scans_same "new annotated tag off main" "$fleak"
 equals "new annotated tag off main does not skip" "$(output skip)" ""
 cd "$nb/work" # a full checkout: fetching a missing commit there is not an error by itself
 expect "new branch whose commit can't be found is refused, not skipped" 1 \
@@ -140,8 +182,7 @@ expect "new branch whose commit can't be found is refused, not skipped" 1 \
   PUSH_REF=refs/heads/gone DEFAULT_BRANCH=main bash "$SCAN" range
 new main refs/heads/main
 equals "new default branch scans its whole history" "$(output range)" "$m1"
-equals "new default branch: trufflehog gets no base" "$(output base)" ""
-equals "new default branch: head output" "$(output head)" "$m1"
+scans_same "new default branch" "$m1"
 expect "new default branch: gitleaks refuses a token in its history" 1 env RANGE="$(output range)" bash "$SCAN" gitleaks
 new main ""
 equals "new default branch with no ref named scans its whole history" "$(output range)" "$m1"
@@ -149,6 +190,79 @@ new fresh refs/heads/fresh DEFAULT_BRANCH=gone
 equals "new branch when the default branch is missing scans its whole history" "$(output range)" "$c1"
 new fresh refs/heads/fresh DEFAULT_BRANCH=
 equals "new branch with no default branch named scans its whole history" "$(output range)" "$c1"
+
+# --- trufflehog scans exactly gitleaks' commits, where its own rules would differ
+# trufflehog walks back from one commit (head) and stops at the merge base of head and base, and with no head
+# the trufflehog action picks commits by event. A remote whose main and branch cc have two merge bases (x1 and
+# y1, from a criss-cross merge), and a branch "other" that a checkout only has as a remote-tracking branch:
+#   main   o <- x1 (token) <- a = merge of x1 and y1
+#   cc     o <- y1 (token) <- b = merge of y1 and x1 <- c (token)
+#   other  o <- t (token)
+cc="$tmp/cc"
+git init -q --bare "$cc/remote.git"
+git init -q "$cc/work"
+cd "$cc/work"
+git remote add origin "$cc/remote.git"
+git checkout -q -b main
+echo o >o.txt && git add o.txt && git commit -q -m o
+o=$(git rev-parse HEAD)
+token >x.txt && git add x.txt && git commit -q -m x1
+x1=$(git rev-parse HEAD)
+git checkout -q -b cc "$o"
+token >y.txt && git add y.txt && git commit -q -m y1
+y1=$(git rev-parse HEAD)
+git merge -q --no-ff -m b "$x1"
+token >c.txt && git add c.txt && git commit -q -m c
+c=$(git rev-parse HEAD)
+git checkout -q main
+git merge -q --no-ff -m a "$y1"
+a=$(git rev-parse HEAD)
+git checkout -q -b other "$o"
+token >t.txt && git add t.txt && git commit -q -m t
+t=$(git rev-parse HEAD)
+git push -q origin main cc other
+git fetch -q origin
+git checkout -q cc
+git branch -q -D other
+range EVENT=pull_request PR_BASE="$a" PR_HEAD="$c"
+scans_same "pull request whose base and head have two merge bases" "$c"
+range EVENT=push PUSH_BEFORE="$a" PUSH_AFTER="$c"
+scans_same "push from a commit with two merge bases" "$c"
+range EVENT=schedule
+scans_same "schedule: every branch, remote-tracking ones too" "$x1" "$y1" "$c" "$t"
+range EVENT=pull_request PR_BASE="$a" PR_HEAD="$c" COMMITS=all
+scans_same "commits all on a pull request: the whole history, not the pull request" "$x1" "$y1" "$c" "$t"
+range COMMITS="$a...$c"
+scans_same "commits a...b: either side, not both" "$c"
+range COMMITS="$x1"
+scans_same "commits naming one commit: its history" "$x1"
+range COMMITS="$a.."
+scans_same "commits a..: up to the checked-out commit" "$c"
+range COMMITS="HEAD..HEAD"
+scans_same "commits HEAD..HEAD: nothing"
+cd "$cc" && rm -rf "$cc/checkout"
+git -c advice.detachedHead=false clone -q --depth 1 --branch cc "file://$cc/remote.git" "$cc/checkout"
+cd "$cc/checkout"
+range EVENT=push PUSH_BEFORE="$zero" PUSH_AFTER="$c" PUSH_REF=refs/heads/cc DEFAULT_BRANCH=main
+scans_same "new branch with two merge bases" "$c"
+cd "$cc/work"
+git checkout -q --detach
+token >h.txt && git add h.txt && git commit -q -m h
+h=$(git rev-parse HEAD)
+range EVENT=schedule
+scans_same "schedule: a commit only HEAD has" "$x1" "$y1" "$c" "$t" "$h"
+git checkout -q cc
+# trufflehog can only be handed a set of commits that git revisions name (A..B, A...B, ^A, --all); a commits
+# value that filters them (by date, count or path) is refused rather than scanned differently.
+cd "$cc/work"
+expect "commits filtered by date is refused while trufflehog is on" 1 env COMMITS="--since=2000-01-01 HEAD" bash "$SCAN" range
+expect "commits without merges is refused while trufflehog is on" 1 env COMMITS="HEAD --no-merges" bash "$SCAN" range
+expect "commits filtered by path is refused while trufflehog is on" 1 env COMMITS="HEAD x.txt" bash "$SCAN" range
+git tag -a -m t1 t1 "$x1"
+range COMMITS=t1
+scans_same "commits naming an annotated tag: its commit's history" "$x1"
+expect "commits filtered by date is gitleaks' alone with trufflehog off" 0 \
+  env COMMITS="--since=2000-01-01 HEAD" TRUFFLEHOG_ENABLED=false bash "$SCAN" range
 cd "$tmp/repo"
 unset GITHUB_OUTPUT
 
