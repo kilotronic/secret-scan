@@ -13,7 +13,7 @@ GITLEAKS_VERSION=8.30.1
 out() { echo "$1=$2" >>"${GITHUB_OUTPUT:-/dev/stdout}"; }
 
 cmd_range() {
-  local zero=0000000000000000000000000000000000000000 range="${COMMITS:-}" base="" head=""
+  local zero=0000000000000000000000000000000000000000 range="${COMMITS:-}" base="" head="" new=""
   if [ -z "$range" ]; then
     case "${EVENT:-}" in
       pull_request | pull_request_target)
@@ -24,7 +24,7 @@ cmd_range() {
           out skip true
           return 0
         elif [ -z "${PUSH_BEFORE:-}" ] || [ "$PUSH_BEFORE" = "$zero" ]; then
-          range="$PUSH_AFTER^!" head="$PUSH_AFTER" # new branch: its tip
+          new=true range="$PUSH_AFTER" head="$PUSH_AFTER" # new branch: worked out below, once fetched
         else
           range="$PUSH_BEFORE..$PUSH_AFTER" base="$PUSH_BEFORE" head="$PUSH_AFTER"
         fi
@@ -47,6 +47,10 @@ cmd_range() {
   elif [ "${#shas[@]}" -gt 0 ]; then
     git fetch -q --no-tags origin "${shas[@]}" || true # already present on a full checkout
   fi
+  if [ -n "$new" ]; then
+    new_branch_range
+    [ -z "$range" ] && return 0
+  fi
   # Resolve names like HEAD~2 now: trufflehog runs in a container and gets plain commit ids.
   [ -n "$base" ] && base=$(git rev-parse "$base")
   [ -n "$head" ] && head=$(git rev-parse "$head")
@@ -54,6 +58,33 @@ cmd_range() {
   out range "$range"
   out base "$base"
   out head "$head"
+}
+
+# A push that created a branch (or tag) at PUSH_AFTER: scan its commits that the default branch doesn't have
+# yet, the same rule as the pre-push hook. Sets range, base and head, or range="" (and skip) when there is
+# nothing new. The default branch itself (a first push), or no default branch to compare with, scans the
+# whole history: there is nothing to trust yet.
+new_branch_range() {
+  local default="${DEFAULT_BRANCH:-}" tip=""
+  if [ -n "$default" ] && [ "${PUSH_REF:-}" != "refs/heads/$default" ] &&
+    git fetch -q --no-tags origin "+refs/heads/$default:refs/remotes/origin/$default" 2>/dev/null; then
+    tip=$(git rev-parse -q --verify "refs/remotes/origin/$default^{commit}" || true)
+  fi
+  if [ -z "$tip" ]; then
+    echo "New branch with no default branch to compare with: scanning its whole history."
+    range="$PUSH_AFTER" base="" head="$PUSH_AFTER"
+    return 0
+  fi
+  if [ -z "$(git rev-list -1 "$tip..$PUSH_AFTER")" ]; then
+    echo "New branch with no commits that $default doesn't have: nothing to scan."
+    out skip true
+    range=""
+    return 0
+  fi
+  # gitleaks reads the exact set; trufflehog walks from head back to base, so give it the merge base
+  # (an orphan branch has none, and trufflehog then scans its whole history).
+  range="$tip..$PUSH_AFTER" head="$PUSH_AFTER"
+  base=$(git merge-base "$tip" "$PUSH_AFTER" || true)
 }
 
 # Install the pinned gitleaks once into a cache directory (checksum checked) and set GITLEAKS to its path.

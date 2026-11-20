@@ -32,8 +32,12 @@ Docker, so use a Linux runner with Docker (GitHub's `ubuntu-latest` has it), or 
 Which commits it scans by default:
 
 - On a pull request, every commit in the PR.
-- On a push, the newly pushed commits, or only the tip of a newly created branch. Deleting a branch
-  scans nothing.
+- On a push, the newly pushed commits. Deleting a branch scans nothing.
+- On a push that creates a branch (or tag), its commits that the repository's default branch doesn't have
+  yet, the same rule as the pre-push hook. A merge commit on the branch is scanned like any other; what it
+  merged in from the default branch is not scanned again. A new branch with no such commits scans
+  nothing. The default branch's own first push (or a repository with no default branch to
+  compare with) scans the whole history, since nothing has been scanned yet.
 - On other events (schedule, manual runs), the whole history.
 
 ## Use as a pre-commit or prek hook
