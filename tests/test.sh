@@ -143,6 +143,8 @@ equals "new default branch scans its whole history" "$(output range)" "$m1"
 equals "new default branch: trufflehog gets no base" "$(output base)" ""
 equals "new default branch: head output" "$(output head)" "$m1"
 expect "new default branch: gitleaks refuses a token in its history" 1 env RANGE="$(output range)" bash "$SCAN" gitleaks
+new main ""
+equals "new default branch with no ref named scans its whole history" "$(output range)" "$m1"
 new fresh refs/heads/fresh DEFAULT_BRANCH=gone
 equals "new branch when the default branch is missing scans its whole history" "$(output range)" "$c1"
 new fresh refs/heads/fresh DEFAULT_BRANCH=

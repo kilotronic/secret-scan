@@ -72,8 +72,9 @@ new_branch_range() {
     echo "::error::secret-scan: the pushed commit $PUSH_AFTER is not in this checkout"
     exit 1
   fi
-  if [ -n "$default" ] && [ "${PUSH_REF:-}" != "refs/heads/$default" ] &&
-    git fetch -q --no-tags origin "+refs/heads/$default:refs/remotes/origin/$default" 2>/dev/null; then
+  # Without PUSH_REF the default branch's own push can't be told apart, so it falls to the whole history.
+  if [ -n "$default" ] && [ -n "${PUSH_REF:-}" ] && [ "$PUSH_REF" != "refs/heads/$default" ] &&
+    git fetch -q --no-tags origin "+refs/heads/$default:refs/remotes/origin/$default"; then
     tip=$(git rev-parse -q --verify "refs/remotes/origin/$default^{commit}" || true)
   fi
   if [ -z "$tip" ]; then
@@ -84,7 +85,7 @@ new_branch_range() {
   local first
   first=$(git rev-list -1 "$tip..$after") # on its own line, so a git error stops the scan
   if [ -z "$first" ]; then
-    echo "New branch with no commits that $default doesn't have: nothing to scan."
+    echo "New branch with no commits that $default doesn't have (at $tip): nothing to scan."
     out skip true
     range=""
     return 0

@@ -34,8 +34,8 @@ Which commits it scans by default:
 - On a pull request, every commit in the PR.
 - On a push, the newly pushed commits. Deleting a branch scans nothing.
 - On a push that creates a branch (or tag), its commits that the repository's default branch doesn't have
-  yet. Commits a branch merged in from the default branch are not scanned again. A new branch with no
-  such commits scans nothing. The default branch's own first push (or a repository with no default
+  yet (as the default branch stands when the job runs). Commits a branch merged in from the default
+  branch are not scanned again. A new branch with no such commits scans nothing. The default branch's own first push (or a repository with no default
   branch to compare with) scans the whole history, since nothing has been scanned yet.
 - On other events (schedule, manual runs), the whole history.
 
