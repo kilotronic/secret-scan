@@ -90,7 +90,10 @@ zero=0000000000000000000000000000000000000000
 # --- range: which commits each event scans
 range() {
   : >"$GITHUB_OUTPUT"
-  env "$@" bash "$SCAN" range >/dev/null
+  env "$@" bash "$SCAN" range >"$tmp/log" 2>&1 || {
+    fail "range $*"
+    sed 's/^/     /' "$tmp/log"
+  }
 }
 export GITHUB_OUTPUT="$tmp/out"
 range EVENT=pull_request PR_BASE="$base" PR_HEAD="$clean"
@@ -123,7 +126,6 @@ cd "$nb/work"
 git remote add origin "$nb/remote.git"
 git checkout -q -b main
 echo hello >a.txt && git add a.txt && git commit -q -m m0
-m0=$(git rev-parse HEAD)
 git checkout -q -b feature
 token >leak.txt && git add leak.txt && git commit -q -m leak
 fleak=$(git rev-parse HEAD)
@@ -243,11 +245,22 @@ git -c advice.detachedHead=false clone -q --depth 1 --branch cc "file://$cc/remo
 cd "$cc/checkout"
 range EVENT=push PUSH_BEFORE="$zero" PUSH_AFTER="$c" PUSH_REF=refs/heads/cc DEFAULT_BRANCH=main
 scans_same "new branch with two merge bases" "$c"
+cd "$cc/work"
+git checkout -q --detach
+token >h.txt && git add h.txt && git commit -q -m h
+h=$(git rev-parse HEAD)
+range EVENT=schedule
+scans_same "schedule: a commit only HEAD has" "$x1" "$y1" "$c" "$t" "$h"
+git checkout -q cc
 # trufflehog can only be handed a set of commits that git revisions name (A..B, A...B, ^A, --all); a commits
 # value that filters them (by date, count or path) is refused rather than scanned differently.
 cd "$cc/work"
 expect "commits filtered by date is refused while trufflehog is on" 1 env COMMITS="--since=2000-01-01 HEAD" bash "$SCAN" range
 expect "commits without merges is refused while trufflehog is on" 1 env COMMITS="HEAD --no-merges" bash "$SCAN" range
+expect "commits filtered by path is refused while trufflehog is on" 1 env COMMITS="HEAD x.txt" bash "$SCAN" range
+git tag -a -m t1 t1 "$x1"
+range COMMITS=t1
+scans_same "commits naming an annotated tag: its commit's history" "$x1"
 expect "commits filtered by date is gitleaks' alone with trufflehog off" 0 \
   env COMMITS="--since=2000-01-01 HEAD" TRUFFLEHOG_ENABLED=false bash "$SCAN" range
 cd "$tmp/repo"

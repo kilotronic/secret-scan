@@ -16,23 +16,20 @@ cmd_range() {
   local zero=0000000000000000000000000000000000000000 range="${COMMITS:-}" base="" head="" new=""
   if [ -z "$range" ]; then
     case "${EVENT:-}" in
-      pull_request | pull_request_target)
-        range="$PR_BASE..$PR_HEAD" base="$PR_BASE" head="$PR_HEAD" ;;
+      pull_request | pull_request_target) range="$PR_BASE..$PR_HEAD" ;;
       push)
         if [ -z "${PUSH_AFTER:-}" ] || [ "$PUSH_AFTER" = "$zero" ]; then
           echo "Branch deleted: nothing to scan."
           out skip true
           return 0
         elif [ -z "${PUSH_BEFORE:-}" ] || [ "$PUSH_BEFORE" = "$zero" ]; then
-          new=true range="$PUSH_AFTER" head="$PUSH_AFTER" # new branch: worked out below, once fetched
+          new=true range="$PUSH_AFTER" # new branch: worked out below, once fetched
         else
-          range="$PUSH_BEFORE..$PUSH_AFTER" base="$PUSH_BEFORE" head="$PUSH_AFTER"
+          range="$PUSH_BEFORE..$PUSH_AFTER"
         fi
         ;;
       *) range=all ;;
     esac
-  elif [[ "$range" == *..* && "$range" != *...* ]]; then
-    base="${range%%..*}" head="${range##*..}"
   fi
 
   if ! git rev-parse --git-dir >/dev/null 2>&1; then
@@ -51,9 +48,7 @@ cmd_range() {
     new_branch_range
     [ -z "$range" ] && return 0
   fi
-  # Resolve names like HEAD~2 now: trufflehog runs in a container and gets plain commit ids.
-  [ -n "$base" ] && base=$(git rev-parse "$base")
-  [ -n "$head" ] && head=$(git rev-parse "$head")
+  [ "${TRUFFLEHOG_ENABLED:-true}" = true ] && trufflehog_ends
   echo "Scanning: $range"
   out range "$range"
   out base "$base"
@@ -61,7 +56,7 @@ cmd_range() {
 }
 
 # A push that created a branch (or tag) at PUSH_AFTER: scan its commits that the default branch doesn't have
-# yet (the pre-push hook skips what any remote branch has; this is stricter). Sets range, base and head, or range="" (and skip) when there is
+# yet (the pre-push hook skips what any remote branch has; this is stricter). Sets range, or range="" (and skip) when there is
 # nothing new. The default branch itself (a first push), or no default branch to compare with, scans the
 # whole history: there is nothing to trust yet.
 new_branch_range() {
@@ -79,7 +74,7 @@ new_branch_range() {
   fi
   if [ -z "$tip" ]; then
     echo "New branch with no default branch to compare with: scanning its whole history."
-    range="$after" base="" head="$after"
+    range="$after"
     return 0
   fi
   local first
@@ -90,10 +85,57 @@ new_branch_range() {
     range=""
     return 0
   fi
-  # gitleaks reads the exact set; trufflehog walks from head back to base, so give it the merge base
-  # (an orphan branch has none, and trufflehog then scans its whole history).
-  range="$tip..$after" head="$after"
-  base=$(git merge-base "$tip" "$after" || true)
+  range="$tip..$after"
+}
+
+# Set base and head for trufflehog so that it scans exactly the commits gitleaks scans for RANGE. trufflehog
+# walks back from one commit (head) to the merge base of head and base, which is not RANGE's set when RANGE has
+# more than one start or end (all, a...b) or its ends have two merge bases (a criss-cross merge). So head is a
+# new empty merge of RANGE's starting commits and base, and base is RANGE's one stopping commit, or an empty
+# merge of several: walking back from head to base visits exactly RANGE's commits, plus head itself, which has
+# no changes of its own. The new commits are only objects in this checkout, under no branch, so trufflehog scans
+# it in place (action.yml's --trust-local-git-config) rather than a clone that would leave them out. A RANGE
+# that filters commits (by date, count or path) can't be handed over this way, and is refused.
+trufflehog_ends() {
+  local words=() starts=() stops=() line sha
+  if [ "$range" = all ]; then
+    words=(--all HEAD) # gitleaks' whole-history scan is git log --all, which includes HEAD
+  else
+    read -ra words <<<"$range" # split on spaces, as gitleaks splits --log-opts
+  fi
+  local revs
+  revs=$(git rev-parse --revs-only "${words[@]}") || not_exact # keeps options (--max-age=...), refused below
+  while read -r line; do
+    [ -n "$line" ] || continue
+    sha=$(git rev-parse -q --verify "${line#^}^{commit}") || not_exact # an annotated tag is peeled to its commit
+    if [ "${line:0:1}" = "^" ]; then stops+=("$sha"); else starts+=("$sha"); fi
+  done <<<"$revs"
+  base=""
+  if [ "${#stops[@]}" -eq 1 ]; then
+    base=${stops[0]}
+  elif [ "${#stops[@]}" -gt 1 ]; then
+    base=$(empty_merge "${stops[@]}")
+  fi
+  head=$(empty_merge ${starts[@]+"${starts[@]}"} ${base:+"$base"})
+  local want got
+  want=$(git rev-list "${words[@]}" 2>/dev/null | sort) || want="(not a set of commits)"
+  got=$(git rev-list "$head" ${base:+"^$base"} | grep -vx "$head" | sort || true)
+  [ "$want" = "$got" ] || not_exact
+}
+
+not_exact() {
+  echo "::error::secret-scan: trufflehog can't scan exactly the commits '$range' selects: give commits as git revisions or ranges (such as main..HEAD), or set trufflehog: false"
+  exit 1
+}
+
+# empty_merge <commit...>: a new commit with these parents (duplicates dropped) and no files, under no branch.
+empty_merge() {
+  local tree parents=() sha
+  tree=$(git mktree </dev/null)
+  for sha in $(printf '%s\n' "$@" | awk 'NF && !seen[$0]++'); do parents+=(-p "$sha"); done
+  GIT_AUTHOR_NAME=secret-scan GIT_AUTHOR_EMAIL=secret-scan@invalid GIT_AUTHOR_DATE="@0 +0000" \
+    GIT_COMMITTER_NAME=secret-scan GIT_COMMITTER_EMAIL=secret-scan@invalid GIT_COMMITTER_DATE="@0 +0000" \
+    git commit-tree "$tree" ${parents[@]+"${parents[@]}"} -m "secret-scan: the commits to scan"
 }
 
 # Install the pinned gitleaks once into a cache directory (checksum checked) and set GITLEAKS to its path.
