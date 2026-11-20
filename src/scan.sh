@@ -13,7 +13,10 @@ GITLEAKS_VERSION=8.30.1
 out() { echo "$1=$2" >>"${GITHUB_OUTPUT:-/dev/stdout}"; }
 
 cmd_range() {
-  local zero=0000000000000000000000000000000000000000 range="${COMMITS:-}" base="" head="" new=""
+  local zero=0000000000000000000000000000000000000000 range base="" head="" new=""
+  range=$(printf '%s' "${COMMITS:-}") # drops the newline a YAML | block ends with
+  # One line: it is handed on as a step output, and gitleaks and trufflehog would each read a second line differently.
+  [[ "$range" == *$'\n'* ]] && error "commits must be on one line: '$range'"
   if [ -z "$range" ]; then
     case "${EVENT:-}" in
       pull_request | pull_request_target) range="$PR_BASE..$PR_HEAD" ;;
@@ -89,52 +92,96 @@ new_branch_range() {
 }
 
 # Set base and head for trufflehog so that it scans exactly the commits gitleaks scans for RANGE. trufflehog
-# walks back from one commit (head) to the merge base of head and base, which is not RANGE's set when RANGE has
-# more than one start or end (all, a...b) or its ends have two merge bases (a criss-cross merge). So head is a
-# new empty merge of RANGE's starting commits and base, and base is RANGE's one stopping commit, or an empty
-# merge of several: walking back from head to base visits exactly RANGE's commits, plus head itself, which has
-# no changes of its own. The new commits are only objects in this checkout, under no branch, so trufflehog scans
-# it in place (action.yml's --trust-local-git-config) rather than a clone that would leave them out. A RANGE
-# that filters commits (by date, count or path) can't be handed over this way, and is refused.
+# (TRUFFLEHOG_MIN and later) scans what git lists for "head ^base", with base swapped for the merge base of head
+# and base. That is not RANGE's set when RANGE has more than one start or end (all, a...b) or its ends have two
+# merge bases (a criss-cross merge). So head is a new merge of RANGE's starting commits and base, and base is
+# RANGE's one stopping commit, or a new merge of several: walking back from head to base visits exactly RANGE's
+# commits, plus the new merges, which change no files. They are only objects in this checkout, under no branch,
+# so trufflehog scans it in place (action.yml's --trust-local-git-config) rather than a clone that would leave
+# them out. A RANGE that filters commits (by date, count, author or path) can't be handed over this way, and is
+# refused.
+TRUFFLEHOG_MIN=3.99.9
 trufflehog_ends() {
-  local words=() starts=() stops=() line sha
+  local version=${TRUFFLEHOG_VERSION:-$TRUFFLEHOG_MIN}
+  older_than "$version" "$TRUFFLEHOG_MIN" &&
+    error "trufflehog-version $version is older than $TRUFFLEHOG_MIN, the oldest that can be handed exactly the commits gitleaks scans"
+  local words=() revs starts stops err others
   if [ "$range" = all ]; then
     words=(--all HEAD) # gitleaks' whole-history scan is git log --all, which includes HEAD
   else
     read -ra words <<<"$range" # split on spaces, as gitleaks splits --log-opts
   fi
-  local revs
-  revs=$(git rev-parse --revs-only "${words[@]}") || not_exact # keeps options (--max-age=...), refused below
-  while read -r line; do
-    [ -n "$line" ] || continue
-    sha=$(git rev-parse -q --verify "${line#^}^{commit}") || not_exact # an annotated tag is peeled to its commit
-    if [ "${line:0:1}" = "^" ]; then stops+=("$sha"); else starts+=("$sha"); fi
-  done <<<"$revs"
-  base=""
-  if [ "${#stops[@]}" -eq 1 ]; then
-    base=${stops[0]}
-  elif [ "${#stops[@]}" -gt 1 ]; then
-    base=$(empty_merge "${stops[@]}")
+  # rev-parse passes over a name it can't find, so ask rev-list, which names it.
+  err=$(git rev-list -n 1 "${words[@]}" 2>&1 >/dev/null) || error "commits '$range': $(head -1 <<<"$err")"
+  revs=$(git rev-parse --revs-only "${words[@]}")
+  # Options that filter commits (--max-age=, --no-merges) and paths are what's left besides the revisions and
+  # options that only order them.
+  others=$(grep -vx -e '--topo-order' -e '--date-order' -e '--author-date-order' -e '--reverse' <<<"$revs" | grep '^-' || true)
+  others+=$(git rev-parse --no-revs "${words[@]}" | { grep -vx -e '--' || true; })
+  if [ -n "$others" ]; then
+    error "trufflehog can't scan exactly the commits '$range' selects: give commits as git revisions or ranges (such as main..HEAD), or set trufflehog: false"
   fi
-  head=$(empty_merge ${starts[@]+"${starts[@]}"} ${base:+"$base"})
-  local want got
-  want=$(git rev-list "${words[@]}" 2>/dev/null | sort) || want="(not a set of commits)"
-  got=$(git rev-list "$head" ${base:+"^$base"} | grep -vx "$head" | sort || true)
-  [ "$want" = "$got" ] || not_exact
+  # Each revision as a commit, an annotated tag peeled. A tag on a blob or tree has no commits: passed over, as git log does.
+  starts=$({ grep -v '^\^' <<<"$revs" || true; } | as_commits)
+  stops=$(sed -n 's/^\^//p' <<<"$revs" | as_commits)
+  base=""
+  if [ "$(grep -c . <<<"$stops")" -gt 1 ]; then
+    base=$(merge_all <<<"$stops")
+  else
+    base=$stops
+  fi
+  head=$(printf '%s\n' "$starts" "$base" | merge_all)
 }
 
-not_exact() {
-  echo "::error::secret-scan: trufflehog can't scan exactly the commits '$range' selects: give commits as git revisions or ranges (such as main..HEAD), or set trufflehog: false"
+error() {
+  echo "::error::secret-scan: $1"
   exit 1
 }
 
-# empty_merge <commit...>: a new commit with these parents (duplicates dropped) and no files, under no branch.
+# older_than <version> <minimum>: true when version (such as 3.88.0, v3.88.0 or 3.88.0-rc1) is below minimum.
+# A tag that isn't a version (latest) is not judged.
+older_than() {
+  local v=${1#v} i a=() b=()
+  v=${v%%-*}
+  [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -ra a <<<"$v"
+  IFS=. read -ra b <<<"$2"
+  for i in 0 1 2; do
+    [ "$((10#${a[i]}))" -lt "${b[i]}" ] && return 0
+    [ "$((10#${a[i]}))" -gt "${b[i]}" ] && return 1
+  done
+  return 1
+}
+
+# as_commits: the commit each object id on stdin peels to, one per line; objects that aren't commits (a tag on a
+# blob, which cat-file reports as missing) are left out. Any other git failure stops the scan.
+as_commits() {
+  sed '/^$/d; s/$/^{commit}/' | git cat-file --batch-check='%(objectname)' | { grep -v ' missing$' || true; }
+}
+
+# merge_all: one new commit that has every commit on stdin (duplicates dropped) as an ancestor, joining at most
+# SECRET_SCAN_MERGE_WIDTH (at least 2) at a time so that a repository with many refs stays within the command
+# line's limit. Command substitution turns set -e off, so each step checks its own failure.
+merge_all() {
+  local list line width=${SECRET_SCAN_MERGE_WIDTH:-1000}
+  [ "$width" -ge 2 ] || width=2
+  list=$(awk 'NF && !seen[$0]++') || return 1
+  while [ "$(grep -c . <<<"$list")" -gt "$width" ]; do
+    # shellcheck disable=SC2086 # each line holds up to $width commit ids
+    list=$(xargs -n "$width" <<<"$list" | while read -r line; do empty_merge $line || exit 1; done) || return 1
+  done
+  # shellcheck disable=SC2086
+  empty_merge $list
+}
+
+# empty_merge <commit...>: a new commit with these parents and its first parent's files (so it changes nothing),
+# under no branch.
 empty_merge() {
   local tree parents=() sha
-  tree=$(git mktree </dev/null)
-  for sha in $(printf '%s\n' "$@" | awk 'NF && !seen[$0]++'); do parents+=(-p "$sha"); done
-  GIT_AUTHOR_NAME=secret-scan GIT_AUTHOR_EMAIL=secret-scan@invalid GIT_AUTHOR_DATE="@0 +0000" \
-    GIT_COMMITTER_NAME=secret-scan GIT_COMMITTER_EMAIL=secret-scan@invalid GIT_COMMITTER_DATE="@0 +0000" \
+  if [ $# -gt 0 ]; then tree=$(git rev-parse "$1^{tree}") || return 1; else tree=$(git mktree </dev/null) || return 1; fi
+  for sha in "$@"; do parents+=(-p "$sha"); done
+  GIT_AUTHOR_NAME=secret-scan GIT_AUTHOR_EMAIL=secret-scan@invalid \
+    GIT_COMMITTER_NAME=secret-scan GIT_COMMITTER_EMAIL=secret-scan@invalid \
     git commit-tree "$tree" ${parents[@]+"${parents[@]}"} -m "secret-scan: the commits to scan"
 }
 

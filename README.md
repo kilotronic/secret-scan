@@ -40,13 +40,13 @@ Which commits it scans by default (both scanners scan the same commits):
 - On other events (schedule, manual runs), the whole history: every branch and tag the checkout has,
   remote-tracking branches included, and HEAD.
 
-With `commits` set, the commits it names: git revisions or ranges such as `main..HEAD`, `main...HEAD`, one
+With `commits` set (on one line), the commits it names: git revisions or ranges such as `main..HEAD`, `main...HEAD`, one
 commit (its history) or `all` (the whole history, as above). A value that filters commits instead (by date,
 count, author or path, such as `--since=2024-01-01 HEAD`) is refused while trufflehog is on, since trufflehog
 can't be told to scan exactly those commits; gitleaks alone (`trufflehog: false`) takes any `git log` options.
 
-trufflehog walks back from one commit to another, so the Action hands it a commit it makes for the scan: an
-empty merge of the commits to scan, which changes no files and is under no branch. To see it, trufflehog
+trufflehog walks back from one commit to another, so the Action hands it commits it makes for the scan:
+merges of the commits to scan that change no files and are under no branch. To see them, trufflehog
 scans the checkout in place (`--trust-local-git-config`) instead of a clone of it, so don't pass that flag
 in `trufflehog-args` yourself.
 
@@ -87,7 +87,7 @@ Docker and calls each key's service. The hooks need `bash`, `curl` and `tar` (Li
 | `gitleaks` | `true` | Run gitleaks. A `.gitleaks.toml` at the repo root (e.g. to allow known look-alikes) is used |
 | `trufflehog` | `true` | Run trufflehog (needs Docker) |
 | `trufflehog-args` | `--results=verified` | Extra trufflehog arguments; the default fails only on working keys |
-| `trufflehog-version` | `3.99.9` | trufflehog image tag |
+| `trufflehog-version` | `3.99.9` | trufflehog image tag; 3.99.9 or later, the oldest that can be handed exactly gitleaks' commits |
 
 Output: `range`, the git range that was scanned.
 
