@@ -53,10 +53,37 @@ jobs:
       - name: The scan must refuse the fake token
         run: test "${{ steps.leak.outcome }}" = "failure"
 
+  # The pre-commit/prek hooks: a clean sample passes, a fake token is refused, at commit and at push.
+  prek-hooks:
+    runs-on: ubuntu-latest
+    env:
+      GIT_AUTHOR_NAME: ci
+      GIT_AUTHOR_EMAIL: ci@kilotronic.com
+      GIT_COMMITTER_NAME: ci
+      GIT_COMMITTER_EMAIL: ci@kilotronic.com
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install prek==0.5.11
+      - name: prek try-repo against sample files
+        run: |
+          hooks="$GITHUB_WORKSPACE"
+          cd "$(mktemp -d)" && git init -q
+          echo hello > clean.txt && git add clean.txt
+          prek try-repo "$hooks" secret-scan
+          git commit -q -m clean
+          echo "token = ghp_$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 36)" > leak.txt && git add leak.txt
+          if prek try-repo "$hooks" secret-scan; then echo "::error::the staged fake token was not refused"; exit 1; fi
+          git commit -q -m leak
+          git rm -q leak.txt && git commit -q -m clean2
+          prek try-repo "$hooks" secret-scan-push --hook-stage pre-push --from-ref HEAD~1 --to-ref HEAD
+          if prek try-repo "$hooks" secret-scan-push --hook-stage pre-push --from-ref HEAD~2 --to-ref HEAD~1; then
+            echo "::error::the pushed fake token was not refused"; exit 1
+          fi
+
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [lint, dogfood-default, dogfood-range]
+    needs: [lint, dogfood-default, dogfood-range, prek-hooks]
     if: always()
     steps:
       - name: Every job must succeed

@@ -3,6 +3,9 @@
 #   range    work out which commits to scan, fetch their history, and set the step's outputs
 #   gitleaks install the pinned gitleaks (checksum checked) and scan RANGE
 #   verdict  fail if either scanner failed, so both always run and every finding shows in one run
+# Hook modes (.pre-commit-hooks.yaml), run from the root of the repository being committed to:
+#   staged   scan the staged changes with gitleaks (pre-commit)
+#   push     scan the commits being pushed with gitleaks (pre-push)
 set -euo pipefail
 
 GITLEAKS_VERSION=8.30.1
@@ -53,7 +56,8 @@ cmd_range() {
   out head "$head"
 }
 
-cmd_gitleaks() {
+# Install the pinned gitleaks once into a cache directory (checksum checked) and set GITLEAKS to its path.
+install_gitleaks() {
   local os arch sum
   case "$(uname -s)-$(uname -m)" in
     Linux-x86_64) os=linux arch=x64 sum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
@@ -62,10 +66,18 @@ cmd_gitleaks() {
     Darwin-x86_64) os=darwin arch=x64 sum=dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709 ;;
     *) echo "::error::secret-scan: no gitleaks build for $(uname -s) $(uname -m)"; exit 1 ;;
   esac
-  local dir="${RUNNER_TEMP:-/tmp}/secret-scan-gitleaks-$GITLEAKS_VERSION"
-  if [ ! -x "$dir/gitleaks" ]; then
+  local dir
+  if [ -n "${RUNNER_TEMP:-}" ]; then
+    dir="$RUNNER_TEMP/secret-scan-gitleaks-$GITLEAKS_VERSION"
+  else
+    dir="${XDG_CACHE_HOME:-$HOME/.cache}/kilotronic-secret-scan/gitleaks-$GITLEAKS_VERSION"
+  fi
+  GITLEAKS="$dir/gitleaks"
+  if [ ! -x "$GITLEAKS" ]; then
     mkdir -p "$dir"
-    local tgz="$dir/gitleaks.tar.gz"
+    local tgz tmp
+    tgz=$(mktemp "$dir/gitleaks.tar.gz.XXXXXX")
+    tmp=$(mktemp -d "$dir/extract.XXXXXX")
     curl -sSfL -o "$tgz" \
       "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_${os}_${arch}.tar.gz"
     if command -v sha256sum >/dev/null; then
@@ -73,12 +85,37 @@ cmd_gitleaks() {
     else
       echo "$sum  $tgz" | shasum -a 256 -c - >/dev/null
     fi
-    tar -xzf "$tgz" -C "$dir" gitleaks
-    rm "$tgz"
+    tar -xzf "$tgz" -C "$tmp" gitleaks
+    mv -f "$tmp/gitleaks" "$GITLEAKS" # atomic, so two hooks running at once never see half a file
+    rm -rf "$tgz" "$tmp"
   fi
+}
+
+cmd_gitleaks() {
+  install_gitleaks
   local opts=()
   [ "${RANGE:?}" != all ] && opts=(--log-opts="$RANGE")
-  "$dir/gitleaks" git --no-banner --redact --verbose ${opts[@]+"${opts[@]}"} .
+  "$GITLEAKS" git --no-banner --redact --verbose ${opts[@]+"${opts[@]}"} .
+}
+
+cmd_staged() {
+  install_gitleaks
+  "$GITLEAKS" git --no-banner --redact --verbose --pre-commit --staged .
+}
+
+cmd_push() {
+  # pre-commit and prek set these for the pre-push stage. A new branch has no remote commit to start
+  # from, so scan its commits that no remote has yet.
+  local zero=0000000000000000000000000000000000000000 from="${PRE_COMMIT_FROM_REF:-}" to="${PRE_COMMIT_TO_REF:-HEAD}"
+  local opts
+  if [ -n "$from" ] && [ "$from" != "$zero" ]; then
+    opts="$from..$to"
+  else
+    opts="$to --not --remotes"
+  fi
+  install_gitleaks
+  echo "secret-scan: scanning $opts"
+  "$GITLEAKS" git --no-banner --redact --verbose --log-opts="$opts" .
 }
 
 cmd_verdict() {
@@ -92,4 +129,4 @@ cmd_verdict() {
   echo "secret-scan: nothing found (gitleaks: ${GITLEAKS:-off}, trufflehog: ${TRUFFLEHOG:-off})"
 }
 
-"cmd_${1:?usage: scan.sh range|gitleaks|verdict}"
+"cmd_${1:?usage: scan.sh range|gitleaks|verdict|staged|push}"

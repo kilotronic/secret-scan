@@ -1,0 +1,18 @@
+# Hooks for pre-commit and prek. They run the same src/scan.sh and the same pinned, checksum-checked
+# gitleaks as the Action, cached under ~/.cache/kilotronic-secret-scan. A .gitleaks.toml at the root of
+# your repository is used. trufflehog is Action-only: it needs Docker and calls each key's service.
+- id: secret-scan
+  name: secret-scan (gitleaks, staged changes)
+  description: Refuse a commit whose staged changes contain anything shaped like a secret.
+  entry: src/scan.sh staged
+  language: script
+  pass_filenames: false
+  stages: [pre-commit, pre-merge-commit, manual]
+- id: secret-scan-push
+  name: secret-scan (gitleaks, commits being pushed)
+  description: Refuse a push whose new commits contain anything shaped like a secret.
+  entry: src/scan.sh push
+  language: script
+  pass_filenames: false
+  always_run: true
+  stages: [pre-push]
