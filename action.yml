@@ -26,7 +26,7 @@ inputs:
     required: false
     default: "--results=verified"
   trufflehog-version:
-    description: Trufflehog image tag (pinned; "latest" is not recommended).
+    description: Trufflehog image tag (pinned; "latest" is not recommended). 3.99.9 or later.
     required: false
     default: "3.99.9"
 
@@ -51,6 +51,7 @@ runs:
         PUSH_REF: ${{ github.ref }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         TRUFFLEHOG_ENABLED: ${{ inputs.trufflehog }}
+        TRUFFLEHOG_VERSION: ${{ inputs.trufflehog-version }}
       run: bash "$GITHUB_ACTION_PATH/src/scan.sh" range
 
     - name: gitleaks (nothing shaped like a secret)
