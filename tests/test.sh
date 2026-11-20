@@ -138,6 +138,7 @@ cd "$nb/work" # a full checkout: fetching a missing commit there is not an error
 expect "new branch whose commit can't be found is refused, not skipped" 1 \
   env EVENT=push PUSH_BEFORE="$zero" PUSH_AFTER=1234567890123456789012345678901234567890 \
   PUSH_REF=refs/heads/gone DEFAULT_BRANCH=main bash "$SCAN" range
+if grep -q "is not in this checkout" "$tmp/log"; then pass "  ...by the commit check"; else fail "  ...by the commit check"; fi
 new main refs/heads/main
 equals "new default branch scans its whole history" "$(output range)" "$m1"
 equals "new default branch: trufflehog gets no base" "$(output base)" ""

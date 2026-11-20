@@ -52,8 +52,8 @@ cmd_range() {
     [ -z "$range" ] && return 0
   fi
   # Resolve names like HEAD~2 now: trufflehog runs in a container and gets plain commit ids.
-  [ -n "$base" ] && base=$(git rev-parse "$base")
-  [ -n "$head" ] && head=$(git rev-parse "$head")
+  [ -n "$base" ] && base=$(git rev-parse "$base^{commit}") # (a tag's own id would stop trufflehog)
+  [ -n "$head" ] && head=$(git rev-parse "$head^{commit}")
   echo "Scanning: $range"
   out range "$range"
   out base "$base"
@@ -61,8 +61,8 @@ cmd_range() {
 }
 
 # A push that created a branch (or tag) at PUSH_AFTER: scan its commits that the default branch doesn't have
-# yet (the pre-push hook skips what any remote branch has; this is stricter). Sets range, base and head, or range="" (and skip) when there is
-# nothing new. The default branch itself (a first push), or no default branch to compare with, scans the
+# yet (the pre-push hook skips what any remote branch has; this is stricter). Sets range, base and head, or
+# range="" (and skip) when there is nothing new. The default branch itself (a first push), or no default branch to compare with, scans the
 # whole history: there is nothing to trust yet.
 new_branch_range() {
   local default="${DEFAULT_BRANCH:-}" tip="" after
@@ -78,7 +78,7 @@ new_branch_range() {
     tip=$(git rev-parse -q --verify "refs/remotes/origin/$default^{commit}" || true)
   fi
   if [ -z "$tip" ]; then
-    echo "New branch with no default branch to compare with: scanning its whole history."
+    echo "New branch with no default branch to compare with (or it could not be fetched): scanning its whole history."
     range="$after" base="" head="$after"
     return 0
   fi
@@ -90,8 +90,8 @@ new_branch_range() {
     range=""
     return 0
   fi
-  # gitleaks reads the exact set; trufflehog walks from head back to base, so give it the merge base
-  # (an orphan branch has none, and trufflehog then scans its whole history).
+  # trufflehog gets the merge base as its base; an orphan branch has none, and trufflehog then scans its
+  # whole history.
   range="$tip..$after" head="$after"
   base=$(git merge-base "$tip" "$after" || true)
 }
