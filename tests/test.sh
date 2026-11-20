@@ -30,7 +30,10 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-unset COMMITS EVENT PR_BASE PR_HEAD PUSH_BEFORE PUSH_AFTER RUNNER_TEMP
+unset COMMITS EVENT PR_BASE PR_HEAD PUSH_BEFORE PUSH_AFTER RUNNER_TEMP RANGE GITLEAKS TRUFFLEHOG \
+  PRE_COMMIT_FROM_REF PRE_COMMIT_TO_REF GITHUB_OUTPUT
+# The pinned gitleaks goes to a cache inside this run, not the user's ~/.cache.
+export XDG_CACHE_HOME="$tmp/xdg-cache"
 
 # A remote with one clean commit, and a clone with a leak commit then a clean commit on top.
 git init -q --bare "$tmp/remote.git"
@@ -69,7 +72,9 @@ range EVENT=pull_request PR_BASE="$base" PR_HEAD="$clean" COMMITS="HEAD~1..HEAD"
 equals "an explicit range wins over the event" "$(output range)" "HEAD~1..HEAD"
 equals "an explicit range resolves base to a commit id" "$(output base)" "$leak"
 equals "an explicit range resolves head to a commit id" "$(output head)" "$clean"
-(cd "$tmp" && expect "range outside a checkout is refused" 1 env EVENT=schedule bash "$SCAN" range)
+cd "$tmp" # outside any checkout; not a subshell, so a failure is counted
+expect "range outside a checkout is refused" 1 env EVENT=schedule bash "$SCAN" range
+cd "$tmp/repo"
 unset GITHUB_OUTPUT
 
 # --- verdict: fails when either scanner failed
