@@ -40,13 +40,13 @@ Which commits it scans by default (both scanners scan the same commits):
 - On other events (schedule, manual runs), the whole history: every branch and tag the checkout has,
   remote-tracking branches included, and HEAD.
 
-With `commits` set, the commits it names: git revisions or ranges such as `main..HEAD`, `main...HEAD`, one
+With `commits` set (on one line), the commits it names: git revisions or ranges such as `main..HEAD`, `main...HEAD`, one
 commit (its history) or `all` (the whole history, as above). A value that filters commits instead (by date,
 count, author or path, such as `--since=2024-01-01 HEAD`) is refused while trufflehog is on, since trufflehog
 can't be told to scan exactly those commits; gitleaks alone (`trufflehog: false`) takes any `git log` options.
 
 trufflehog walks back from one commit to another, so the Action hands it commits it makes for the scan:
-merges of the commits to scan that change no files and are under no branch. To see it, trufflehog
+merges of the commits to scan that change no files and are under no branch. To see them, trufflehog
 scans the checkout in place (`--trust-local-git-config`) instead of a clone of it, so don't pass that flag
 in `trufflehog-args` yourself.
 

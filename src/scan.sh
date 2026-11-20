@@ -51,8 +51,7 @@ cmd_range() {
     new_branch_range
     [ -z "$range" ] && return 0
   fi
-  # GitHub compares inputs regardless of case, so "True" turns trufflehog on too.
-  [ "$(tr '[:upper:]' '[:lower:]' <<<"${TRUFFLEHOG_ENABLED:-true}")" = true ] && trufflehog_ends
+  [ "${TRUFFLEHOG_ENABLED:-true}" = true ] && trufflehog_ends
   echo "Scanning: $range"
   out range "$range"
   out base "$base"
@@ -104,23 +103,26 @@ new_branch_range() {
 TRUFFLEHOG_MIN=3.99.9
 trufflehog_ends() {
   local version=${TRUFFLEHOG_VERSION:-$TRUFFLEHOG_MIN}
-  if [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]] &&
-    [ "$(printf '%s\n' "$TRUFFLEHOG_MIN" "$version" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" != "$TRUFFLEHOG_MIN" ]; then
+  older_than "$version" "$TRUFFLEHOG_MIN" &&
     error "trufflehog-version $version is older than $TRUFFLEHOG_MIN, the oldest that can be handed exactly the commits gitleaks scans"
-  fi
-  local words=() revs starts stops
+  local words=() revs starts stops err others
   if [ "$range" = all ]; then
     words=(--all HEAD) # gitleaks' whole-history scan is git log --all, which includes HEAD
   else
     read -ra words <<<"$range" # split on spaces, as gitleaks splits --log-opts
   fi
-  revs=$(git rev-parse --revs-only "${words[@]}") || error "commits '$range' names something this checkout doesn't have"
-  # Options that filter commits (--max-age=, --no-merges) and paths are what's left besides the revisions.
-  if grep -q '^-' <<<"$revs" || [ -n "$(git rev-parse --no-revs "${words[@]}")" ]; then
+  # rev-parse passes over a name it can't find, so ask rev-list, which names it.
+  err=$(git rev-list -n 1 "${words[@]}" 2>&1 >/dev/null) || error "commits '$range': $(head -1 <<<"$err")"
+  revs=$(git rev-parse --revs-only "${words[@]}")
+  # Options that filter commits (--max-age=, --no-merges) and paths are what's left besides the revisions and
+  # options that only order them.
+  others=$(grep -vx -e '--topo-order' -e '--date-order' -e '--author-date-order' -e '--reverse' <<<"$revs" | grep '^-' || true)
+  others+=$(git rev-parse --no-revs "${words[@]}" | { grep -vx -e '--' || true; })
+  if [ -n "$others" ]; then
     error "trufflehog can't scan exactly the commits '$range' selects: give commits as git revisions or ranges (such as main..HEAD), or set trufflehog: false"
   fi
   # Each revision as a commit, an annotated tag peeled. A tag on a blob or tree has no commits: passed over, as git log does.
-  starts=$(grep -v '^\^' <<<"$revs" | as_commits)
+  starts=$({ grep -v '^\^' <<<"$revs" || true; } | as_commits)
   stops=$(sed -n 's/^\^//p' <<<"$revs" | as_commits)
   base=""
   if [ "$(grep -c . <<<"$stops")" -gt 1 ]; then
@@ -136,19 +138,37 @@ error() {
   exit 1
 }
 
-# as_commits: the commit each object id on stdin peels to, one per line; objects that aren't commits are left out.
+# older_than <version> <minimum>: true when version (such as 3.88.0, v3.88.0 or 3.88.0-rc1) is below minimum.
+# A tag that isn't a version (latest) is not judged.
+older_than() {
+  local v=${1#v} i a=() b=()
+  v=${v%%-*}
+  [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -ra a <<<"$v"
+  IFS=. read -ra b <<<"$2"
+  for i in 0 1 2; do
+    [ "$((10#${a[i]}))" -lt "${b[i]}" ] && return 0
+    [ "$((10#${a[i]}))" -gt "${b[i]}" ] && return 1
+  done
+  return 1
+}
+
+# as_commits: the commit each object id on stdin peels to, one per line; objects that aren't commits (a tag on a
+# blob, which cat-file reports as missing) are left out. Any other git failure stops the scan.
 as_commits() {
-  sed '/^$/d; s/$/^{commit}/' | git cat-file --batch-check='%(objectname)' 2>/dev/null | grep -v ' missing$' || true
+  sed '/^$/d; s/$/^{commit}/' | git cat-file --batch-check='%(objectname)' | { grep -v ' missing$' || true; }
 }
 
 # merge_all: one new commit that has every commit on stdin (duplicates dropped) as an ancestor, joining at most
-# MERGE_WIDTH at a time so that a repository with many refs stays within the command line's limit.
+# SECRET_SCAN_MERGE_WIDTH (at least 2) at a time so that a repository with many refs stays within the command
+# line's limit. Command substitution turns set -e off, so each step checks its own failure.
 merge_all() {
-  local list line width=${MERGE_WIDTH:-1000}
-  list=$(awk 'NF && !seen[$0]++')
+  local list line width=${SECRET_SCAN_MERGE_WIDTH:-1000}
+  [ "$width" -ge 2 ] || width=2
+  list=$(awk 'NF && !seen[$0]++') || return 1
   while [ "$(grep -c . <<<"$list")" -gt "$width" ]; do
     # shellcheck disable=SC2086 # each line holds up to $width commit ids
-    list=$(xargs -n "$width" <<<"$list" | while read -r line; do empty_merge $line; done)
+    list=$(xargs -n "$width" <<<"$list" | while read -r line; do empty_merge $line || exit 1; done) || return 1
   done
   # shellcheck disable=SC2086
   empty_merge $list
@@ -158,7 +178,7 @@ merge_all() {
 # under no branch.
 empty_merge() {
   local tree parents=() sha
-  if [ $# -gt 0 ]; then tree=$(git rev-parse "$1^{tree}"); else tree=$(git mktree </dev/null); fi
+  if [ $# -gt 0 ]; then tree=$(git rev-parse "$1^{tree}") || return 1; else tree=$(git mktree </dev/null) || return 1; fi
   for sha in "$@"; do parents+=(-p "$sha"); done
   GIT_AUTHOR_NAME=secret-scan GIT_AUTHOR_EMAIL=secret-scan@invalid \
     GIT_COMMITTER_NAME=secret-scan GIT_COMMITTER_EMAIL=secret-scan@invalid \

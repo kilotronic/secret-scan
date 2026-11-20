@@ -50,7 +50,7 @@ runs:
         PUSH_AFTER: ${{ github.event.after }}
         PUSH_REF: ${{ github.ref }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        TRUFFLEHOG_ENABLED: ${{ inputs.trufflehog }}
+        TRUFFLEHOG_ENABLED: ${{ inputs.trufflehog == 'true' }} # as the trufflehog step decides: True is on, empty is off
         TRUFFLEHOG_VERSION: ${{ inputs.trufflehog-version }}
       run: bash "$GITHUB_ACTION_PATH/src/scan.sh" range
 
