@@ -69,7 +69,7 @@ trap 'rm -rf "$tmp"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 unset COMMITS EVENT PR_BASE PR_HEAD PUSH_BEFORE PUSH_AFTER PUSH_REF DEFAULT_BRANCH RUNNER_TEMP RANGE GITLEAKS TRUFFLEHOG \
-  TRUFFLEHOG_ENABLED   PRE_COMMIT_FROM_REF PRE_COMMIT_TO_REF GITHUB_OUTPUT
+  TRUFFLEHOG_ENABLED TRUFFLEHOG_VERSION   PRE_COMMIT_FROM_REF PRE_COMMIT_TO_REF GITHUB_OUTPUT
 # The pinned gitleaks goes to a cache inside this run, not the user's ~/.cache.
 export XDG_CACHE_HOME="$tmp/xdg-cache"
 
@@ -251,7 +251,12 @@ token >h.txt && git add h.txt && git commit -q -m h
 h=$(git rev-parse HEAD)
 range EVENT=schedule
 scans_same "schedule: a commit only HEAD has" "$x1" "$y1" "$c" "$t" "$h"
+git tag blob-tag "$(echo blob | git hash-object -w --stdin)" # a tag that is not on a commit is passed over
+range EVENT=schedule MERGE_WIDTH=2 # head joins the commits to scan two at a time, as with many refs
+scans_same "schedule: many refs, one of them on a blob" "$x1" "$y1" "$c" "$t" "$h"
 git checkout -q cc
+range COMMITS="HEAD --not main"
+scans_same "commits HEAD --not main" "$c"
 # trufflehog can only be handed a set of commits that git revisions name (A..B, A...B, ^A, --all); a commits
 # value that filters them (by date, count or path) is refused rather than scanned differently.
 cd "$cc/work"
@@ -261,6 +266,10 @@ expect "commits filtered by path is refused while trufflehog is on" 1 env COMMIT
 git tag -a -m t1 t1 "$x1"
 range COMMITS=t1
 scans_same "commits naming an annotated tag: its commit's history" "$x1"
+expect "commits filtered by date is refused while trufflehog is True" 1 \
+  env COMMITS="--since=2000-01-01 HEAD" TRUFFLEHOG_ENABLED=True bash "$SCAN" range
+expect "a trufflehog older than the one these tests run is refused" 1 env TRUFFLEHOG_VERSION=3.88.0 bash "$SCAN" range
+expect "the pinned trufflehog is accepted" 0 env TRUFFLEHOG_VERSION="${TRUFFLEHOG_IMAGE##*:}" bash "$SCAN" range
 expect "commits filtered by date is gitleaks' alone with trufflehog off" 0 \
   env COMMITS="--since=2000-01-01 HEAD" TRUFFLEHOG_ENABLED=false bash "$SCAN" range
 cd "$tmp/repo"
