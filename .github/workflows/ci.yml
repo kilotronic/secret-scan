@@ -111,10 +111,19 @@ jobs:
             echo "::error::the pushed fake token was not refused"; exit 1
           fi
 
+  # src/scan.sh against throwaway repositories: each event's range, the verdict, the hooks, the checksum.
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - run: bash tests/test.sh
+
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [lint, git-identity, dogfood-default, dogfood-range, prek-hooks, data-leak-check]
+    needs: [lint, git-identity, dogfood-default, dogfood-range, prek-hooks, unit-tests, data-leak-check]
     if: always()
     steps:
       - name: Every job must succeed
