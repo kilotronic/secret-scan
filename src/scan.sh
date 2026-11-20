@@ -13,7 +13,10 @@ GITLEAKS_VERSION=8.30.1
 out() { echo "$1=$2" >>"${GITHUB_OUTPUT:-/dev/stdout}"; }
 
 cmd_range() {
-  local zero=0000000000000000000000000000000000000000 range="${COMMITS:-}" base="" head="" new=""
+  local zero=0000000000000000000000000000000000000000 range base="" head="" new=""
+  range=$(printf '%s' "${COMMITS:-}") # drops the newline a YAML | block ends with
+  # One line: it is handed on as a step output, and gitleaks and trufflehog would each read a second line differently.
+  [[ "$range" == *$'\n'* ]] && error "commits must be on one line: '$range'"
   if [ -z "$range" ]; then
     case "${EVENT:-}" in
       pull_request | pull_request_target) range="$PR_BASE..$PR_HEAD" ;;
