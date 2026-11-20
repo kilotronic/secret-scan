@@ -69,7 +69,7 @@ trap 'rm -rf "$tmp"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 unset COMMITS EVENT PR_BASE PR_HEAD PUSH_BEFORE PUSH_AFTER PUSH_REF DEFAULT_BRANCH RUNNER_TEMP RANGE GITLEAKS TRUFFLEHOG \
-  TRUFFLEHOG_ENABLED TRUFFLEHOG_VERSION   PRE_COMMIT_FROM_REF PRE_COMMIT_TO_REF GITHUB_OUTPUT
+  TRUFFLEHOG_ENABLED TRUFFLEHOG_VERSION PRE_COMMIT_FROM_REF PRE_COMMIT_TO_REF GITHUB_OUTPUT
 # The pinned gitleaks goes to a cache inside this run, not the user's ~/.cache.
 export XDG_CACHE_HOME="$tmp/xdg-cache"
 
@@ -112,6 +112,11 @@ equals "an explicit range wins over the event" "$(output range)" "HEAD~1..HEAD"
 scans_same "an explicit range: what the scanners find" # clean removes the token: nothing
 range COMMITS="HEAD~2..HEAD"
 scans_same "an explicit range of names" "$leak"
+range COMMITS="HEAD~1..HEAD
+" # a YAML | block ends the value with a newline
+equals "a commits value's trailing newline is dropped" "$(output range)" "HEAD~1..HEAD"
+expect "a commits value over several lines is refused" 1 env COMMITS="HEAD~2..HEAD~1
+HEAD~1..HEAD" bash "$SCAN" range
 cd "$tmp" # outside any checkout; not a subshell, so a failure is counted
 expect "range outside a checkout is refused" 1 env EVENT=schedule bash "$SCAN" range
 cd "$tmp/repo"
