@@ -36,6 +36,32 @@ Which commits it scans by default:
   scans nothing.
 - On other events (schedule, manual runs), the whole history.
 
+## Use as a pre-commit or prek hook
+
+The same scan runs on your machine with [prek](https://github.com/j178/prek) or
+[pre-commit](https://pre-commit.com). In your `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/kilotronic/secret-scan
+    rev: v1.1.0  # `prek autoupdate --freeze` pins the commit SHA
+    hooks:
+      - id: secret-scan        # pre-commit: the staged changes
+      - id: secret-scan-push   # pre-push: the commits being pushed
+```
+
+Then install the hook types you use: `prek install -t pre-commit -t pre-push`.
+
+| Hook | Stage | Scans |
+| --- | --- | --- |
+| `secret-scan` | `pre-commit` (also `pre-merge-commit`, `manual`) | The staged changes |
+| `secret-scan-push` | `pre-push` | The commits being pushed; on a new branch, its commits that no remote has yet |
+
+The hooks run gitleaks only, at the same pinned version and with the same checksum check as the Action. It
+is downloaded once into `~/.cache/kilotronic-secret-scan`. trufflehog stays in the Action, since it needs
+Docker and calls each key's service. The hooks need `bash`, `curl` and `tar` (Linux or macOS), and
+`.gitleaks.toml` at your repository root applies to them too.
+
 ## Inputs
 
 | Input | Default | Meaning |
