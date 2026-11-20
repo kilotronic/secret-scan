@@ -98,14 +98,16 @@ c1=$(git rev-parse HEAD)
 git checkout -q -b merged feature
 git merge -q --no-ff -m merge main
 merged=$(git rev-parse HEAD)
-git push -q origin main feature fresh merged "$m1:refs/heads/nothing-new" "$m1:refs/tags/v9"
+git tag -a -m v8 v8 "$fclean"
+v8=$(git rev-parse v8) # the annotated tag's own id, which a tag push reports as its "after"
+git push -q origin main feature fresh merged v8 "$m1:refs/heads/nothing-new" "$m1:refs/tags/v9"
 # new <branch> <ref> [VAR=value...]: a shallow checkout of <branch> (actions/checkout's default), then the
 # range for the push that created <ref> at that branch's tip.
 new() {
   local branch=$1 ref=$2
   shift 2
   cd "$nb" && rm -rf "$nb/checkout"
-  git clone -q --depth 1 --branch "$branch" "file://$nb/remote.git" "$nb/checkout"
+  git -c advice.detachedHead=false clone -q --depth 1 --branch "$branch" "file://$nb/remote.git" "$nb/checkout"
   cd "$nb/checkout"
   range EVENT=push PUSH_BEFORE="$zero" PUSH_AFTER="$(git rev-parse HEAD)" PUSH_REF="$ref" DEFAULT_BRANCH=main "$@"
 }
@@ -113,6 +115,7 @@ new feature refs/heads/feature
 equals "new branch scans its commits main doesn't have" "$(output range)" "$m1..$fclean"
 equals "new branch gives trufflehog the merge base" "$(output base)" "$m0"
 equals "new branch head output" "$(output head)" "$fclean"
+equals "new branch with new commits does not skip" "$(output skip)" ""
 expect "new branch: gitleaks refuses a token below its tip" 1 env RANGE="$(output range)" bash "$SCAN" gitleaks
 new fresh refs/heads/fresh
 equals "new branch off main's tip scans only its own commit" "$(output range)" "$m1..$c1"
@@ -127,6 +130,14 @@ equals "new branch with no new commits skips the scan" "$(output skip)" "true"
 equals "new branch with no new commits has no range" "$(output range)" ""
 new main refs/tags/v9
 equals "new tag on a commit main has skips the scan" "$(output skip)" "true"
+new v8 refs/tags/v8 PUSH_AFTER="$v8"
+equals "new annotated tag off main scans its commits main doesn't have" "$(output range)" "$m1..$fclean"
+equals "new annotated tag gives trufflehog a commit as head" "$(output head)" "$fclean"
+equals "new annotated tag off main does not skip" "$(output skip)" ""
+cd "$nb/work" # a full checkout: fetching a missing commit there is not an error by itself
+expect "new branch whose commit can't be found is refused, not skipped" 1 \
+  env EVENT=push PUSH_BEFORE="$zero" PUSH_AFTER=1234567890123456789012345678901234567890 \
+  PUSH_REF=refs/heads/gone DEFAULT_BRANCH=main bash "$SCAN" range
 new main refs/heads/main
 equals "new default branch scans its whole history" "$(output range)" "$m1"
 equals "new default branch: trufflehog gets no base" "$(output base)" ""

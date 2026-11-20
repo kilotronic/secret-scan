@@ -61,21 +61,29 @@ cmd_range() {
 }
 
 # A push that created a branch (or tag) at PUSH_AFTER: scan its commits that the default branch doesn't have
-# yet, the same rule as the pre-push hook. Sets range, base and head, or range="" (and skip) when there is
+# yet (the pre-push hook skips what any remote branch has; this is stricter). Sets range, base and head, or range="" (and skip) when there is
 # nothing new. The default branch itself (a first push), or no default branch to compare with, scans the
 # whole history: there is nothing to trust yet.
 new_branch_range() {
-  local default="${DEFAULT_BRANCH:-}" tip=""
+  local default="${DEFAULT_BRANCH:-}" tip="" after
+  # A tag push reports the annotated tag's own id; scanners want its commit. A commit that can't be found
+  # fails here rather than reading as "nothing new".
+  if ! after=$(git rev-parse -q --verify "$PUSH_AFTER^{commit}"); then
+    echo "::error::secret-scan: the pushed commit $PUSH_AFTER is not in this checkout"
+    exit 1
+  fi
   if [ -n "$default" ] && [ "${PUSH_REF:-}" != "refs/heads/$default" ] &&
     git fetch -q --no-tags origin "+refs/heads/$default:refs/remotes/origin/$default" 2>/dev/null; then
     tip=$(git rev-parse -q --verify "refs/remotes/origin/$default^{commit}" || true)
   fi
   if [ -z "$tip" ]; then
     echo "New branch with no default branch to compare with: scanning its whole history."
-    range="$PUSH_AFTER" base="" head="$PUSH_AFTER"
+    range="$after" base="" head="$after"
     return 0
   fi
-  if [ -z "$(git rev-list -1 "$tip..$PUSH_AFTER")" ]; then
+  local first
+  first=$(git rev-list -1 "$tip..$after") # on its own line, so a git error stops the scan
+  if [ -z "$first" ]; then
     echo "New branch with no commits that $default doesn't have: nothing to scan."
     out skip true
     range=""
@@ -83,8 +91,8 @@ new_branch_range() {
   fi
   # gitleaks reads the exact set; trufflehog walks from head back to base, so give it the merge base
   # (an orphan branch has none, and trufflehog then scans its whole history).
-  range="$tip..$PUSH_AFTER" head="$PUSH_AFTER"
-  base=$(git merge-base "$tip" "$PUSH_AFTER" || true)
+  range="$tip..$after" head="$after"
+  base=$(git merge-base "$tip" "$after" || true)
 }
 
 # Install the pinned gitleaks once into a cache directory (checksum checked) and set GITLEAKS to its path.
