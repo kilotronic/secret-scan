@@ -59,8 +59,8 @@ scans_same() {
   fi
   # shellcheck disable=SC2086 # extra_args is split into words, as the trufflehog action does
   got=$(docker run --rm -v "$PWD:/tmp" -w /tmp "$TRUFFLEHOG_IMAGE" git file:///tmp/ --since-commit "$base" \
-    --branch "$head" --no-update --json $TRUFFLEHOG_ARGS 2>/dev/null |
-    grep -oE '"commit":"[0-9a-f]+"' | cut -d'"' -f4 | sort -u || true)
+    --branch "$head" --no-update --json $TRUFFLEHOG_ARGS 2>/dev/null \
+    | grep -oE '"commit":"[0-9a-f]+"' | cut -d'"' -f4 | sort -u || true)
   equals "$name: trufflehog" "$got" "$want"
 }
 
@@ -257,7 +257,7 @@ h=$(git rev-parse HEAD)
 range EVENT=schedule
 scans_same "schedule: a commit only HEAD has" "$x1" "$y1" "$c" "$t" "$h"
 git tag blob-tag "$(echo blob | git hash-object -w --stdin)" # a tag that is not on a commit is passed over
-range EVENT=schedule SECRET_SCAN_MERGE_WIDTH=2 # head joins the commits to scan two at a time, as with many refs
+range EVENT=schedule SECRET_SCAN_MERGE_WIDTH=2               # head joins the commits to scan two at a time, as with many refs
 scans_same "schedule: many refs, one of them on a blob" "$x1" "$y1" "$c" "$t" "$h"
 git checkout -q cc
 range COMMITS="HEAD --not main"

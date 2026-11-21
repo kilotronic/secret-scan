@@ -3,7 +3,7 @@
 A GitHub Action that scans **only the commits a pull request or push brings in** for secrets, with two
 scanners:
 
-- **gitleaks** fails on anything *shaped like* a secret: keys, tokens, passwords in config. It is
+- **gitleaks** fails on anything _shaped like_ a secret: keys, tokens, passwords in config. It is
   installed at a pinned version and its download checksum is checked.
 - **trufflehog** tries each key it finds against its service and, by default, fails only on a key that
   **still works**. It runs at a pinned image version, not `latest`.
@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: kilotronic/secret-scan@v1   # pin a commit SHA in production
+      - uses: kilotronic/secret-scan@v1 # pin a commit SHA in production
 ```
 
 The default shallow checkout is fine: the action fetches the history it needs. trufflehog runs in
@@ -61,18 +61,18 @@ The same scan runs on your machine with [prek](https://github.com/j178/prek) or
 ```yaml
 repos:
   - repo: https://github.com/kilotronic/secret-scan
-    rev: 2665d6f2f0260d3ae0defbedcce27fc63ad6a168  # v1.2.1
+    rev: 2665d6f2f0260d3ae0defbedcce27fc63ad6a168 # v1.2.1
     hooks:
-      - id: secret-scan        # pre-commit: the staged changes
-      - id: secret-scan-push   # pre-push: the commits being pushed
+      - id: secret-scan # pre-commit: the staged changes
+      - id: secret-scan-push # pre-push: the commits being pushed
 ```
 
 Then install the hook types you use: `prek install -t pre-commit -t pre-push`.
 
-| Hook | Stage | Scans |
-| --- | --- | --- |
-| `secret-scan` | `pre-commit` (also `pre-merge-commit`, `manual`) | The staged changes |
-| `secret-scan-push` | `pre-push` | The commits being pushed; on a new branch, its commits that no remote has yet |
+| Hook               | Stage                                            | Scans                                                                         |
+| ------------------ | ------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `secret-scan`      | `pre-commit` (also `pre-merge-commit`, `manual`) | The staged changes                                                            |
+| `secret-scan-push` | `pre-push`                                       | The commits being pushed; on a new branch, its commits that no remote has yet |
 
 The hooks run gitleaks only, at the same pinned version and with the same checksum check as the Action. It
 is downloaded once into `~/.cache/kilotronic-secret-scan`. trufflehog stays in the Action, since it needs
@@ -81,13 +81,13 @@ Docker and calls each key's service. The hooks need `bash`, `curl` and `tar` (Li
 
 ## Inputs
 
-| Input | Default | Meaning |
-| --- | --- | --- |
-| `commits` | empty (this event's commits) | Git revisions or a range such as `main..HEAD`, or `all` for the whole history |
-| `gitleaks` | `true` | Run gitleaks. A `.gitleaks.toml` at the repo root (e.g. to allow known look-alikes) is used |
-| `trufflehog` | `true` | Run trufflehog (needs Docker) |
-| `trufflehog-args` | `--results=verified` | Extra trufflehog arguments; the default fails only on working keys |
-| `trufflehog-version` | `3.99.9` | trufflehog image tag; 3.99.9 or later, the oldest that can be handed exactly gitleaks' commits |
+| Input                | Default                      | Meaning                                                                                        |
+| -------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| `commits`            | empty (this event's commits) | Git revisions or a range such as `main..HEAD`, or `all` for the whole history                  |
+| `gitleaks`           | `true`                       | Run gitleaks. A `.gitleaks.toml` at the repo root (e.g. to allow known look-alikes) is used    |
+| `trufflehog`         | `true`                       | Run trufflehog (needs Docker)                                                                  |
+| `trufflehog-args`    | `--results=verified`         | Extra trufflehog arguments; the default fails only on working keys                             |
+| `trufflehog-version` | `3.99.9`                     | trufflehog image tag; 3.99.9 or later, the oldest that can be handed exactly gitleaks' commits |
 
 Output: `range`, the git range that was scanned.
 
