@@ -71,8 +71,8 @@ new_branch_range() {
     exit 1
   fi
   # Without PUSH_REF the default branch's own push can't be told apart, so it falls to the whole history.
-  if [ -n "$default" ] && [ -n "${PUSH_REF:-}" ] && [ "$PUSH_REF" != "refs/heads/$default" ] &&
-    git fetch -q --no-tags origin "+refs/heads/$default:refs/remotes/origin/$default"; then
+  if [ -n "$default" ] && [ -n "${PUSH_REF:-}" ] && [ "$PUSH_REF" != "refs/heads/$default" ] \
+    && git fetch -q --no-tags origin "+refs/heads/$default:refs/remotes/origin/$default"; then
     tip=$(git rev-parse -q --verify "refs/remotes/origin/$default^{commit}" || true)
   fi
   if [ -z "$tip" ]; then
@@ -103,8 +103,8 @@ new_branch_range() {
 TRUFFLEHOG_MIN=3.99.9
 trufflehog_ends() {
   local version=${TRUFFLEHOG_VERSION:-$TRUFFLEHOG_MIN}
-  older_than "$version" "$TRUFFLEHOG_MIN" &&
-    error "trufflehog-version $version is older than $TRUFFLEHOG_MIN, the oldest that can be handed exactly the commits gitleaks scans"
+  older_than "$version" "$TRUFFLEHOG_MIN" \
+    && error "trufflehog-version $version is older than $TRUFFLEHOG_MIN, the oldest that can be handed exactly the commits gitleaks scans"
   local words=() revs starts stops err others
   if [ "$range" = all ]; then
     words=(--all HEAD) # gitleaks' whole-history scan is git log --all, which includes HEAD
@@ -193,7 +193,10 @@ install_gitleaks() {
     Linux-aarch64 | Linux-arm64) os=linux arch=arm64 sum=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 ;;
     Darwin-arm64) os=darwin arch=arm64 sum=b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 ;;
     Darwin-x86_64) os=darwin arch=x64 sum=dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709 ;;
-    *) echo "::error::secret-scan: no gitleaks build for $(uname -s) $(uname -m)"; exit 1 ;;
+    *)
+      echo "::error::secret-scan: no gitleaks build for $(uname -s) $(uname -m)"
+      exit 1
+      ;;
   esac
   local dir
   if [ -n "${RUNNER_TEMP:-}" ]; then
