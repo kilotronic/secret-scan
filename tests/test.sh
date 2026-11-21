@@ -257,7 +257,8 @@ h=$(git rev-parse HEAD)
 range EVENT=schedule
 scans_same "schedule: a commit only HEAD has" "$x1" "$y1" "$c" "$t" "$h"
 git tag blob-tag "$(echo blob | git hash-object -w --stdin)" # a tag that is not on a commit is passed over
-range EVENT=schedule SECRET_SCAN_MERGE_WIDTH=2               # head joins the commits to scan two at a time, as with many refs
+# head joins the commits to scan two at a time, as with many refs
+range EVENT=schedule SECRET_SCAN_MERGE_WIDTH=2
 scans_same "schedule: many refs, one of them on a blob" "$x1" "$y1" "$c" "$t" "$h"
 git checkout -q cc
 range COMMITS="HEAD --not main"
