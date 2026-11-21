@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: kilotronic/lint@50d58c6fc3916432a60d6caf5914d5bb83a60a16 # v1.1.0
+      - uses: kilotronic/lint@57c42f430af9a89607e32d1947714e2e594db6f3 # v1.2.0
       # The trufflehog action (bumped by Dependabot) and the image it runs must be the same version.
       - name: trufflehog image matches the trufflehog action
         run: |
@@ -48,10 +48,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: kilotronic/git-identity@5a7b91c3194870cf535ba8c37a6c93b19b5a933b # v2.3.1
+      - uses: kilotronic/git-identity@b0d54e809d81cabf61d357cbe519a9b9263b17cb # v2.4.0
         with:
           domains: ixid.net, kilotronic.com
           allow-bots: dependabot
+          commit-subject: true
 
   # Default mode on this repo's own pull request or push: both scanners, nothing to find.
   dogfood-default:
@@ -160,6 +161,19 @@ jobs:
           persist-credentials: false
       - run: bash tests/test.sh
 
+  # The format and lint bundle from .pre-commit-config.yaml (formatters, ruff, markdownlint, yamllint, ...),
+  # the same hooks a commit runs. The identity, secret and private-term hooks run as their own jobs.
+  prek:
+    name: Format and lint (prek)
+    runs-on: ubuntu-latest
+    env:
+      SKIP: git-identity,commit-subject,session-trailer,secret-scan,secret-scan-push,data-leak-check,data-leak-check-commit-msg,data-leak-check-pre-push
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: pipx run prek==0.5.11 run --all-files --show-diff-on-failure
+
   ci:
     name: ci
     runs-on: ubuntu-latest
@@ -173,6 +187,7 @@ jobs:
         prek-hooks,
         unit-tests,
         data-leak-check,
+        prek,
       ]
     if: always()
     steps:
